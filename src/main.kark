@@ -2,6 +2,7 @@
 // Chart of accounts, journals, balanced-line validation, posting and
 // balance queries. Builtins only; all paths are relative to the repo root.
 // "net" is defined purely as debits minus credits (an arithmetic position).
+import acct_controls
 
 func find_rec(state, kind, key) {
     let i = 0
@@ -236,4 +237,5 @@ func main() {
     persist(state_path, state)
     persist(report_path, split(report, "\n"))
     print("ACCOUNTING_OK accounts=" + str(count_kind(state, "ACCOUNT")) + " journals=" + str(count_kind(state, "JOURNAL")) + " lines=" + str(count_kind(state, "LINE")) + " posted=" + str(count_kind(state, "POSTED")))
+    acct_controls.acct2_run()
 }

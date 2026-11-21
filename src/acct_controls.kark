@@ -1,0 +1,239 @@
+// Karkain Accounting - Round 2 trial balance and posting controls.
+// Self-contained module: reads data/r2_accounting.dat, rebuilds state from
+// scratch on every run (safe to repeat), and persists to
+// data/r2_acct_state.dat / data/r2_acct_report.dat. Round 1 sources, state and
+// output are untouched. "net" is debits minus credits (arithmetic position).
+
+func r2_find(state, kind, key) {
+    let i = 0
+    while (i < len(state)) {
+        let f = split(state[i], "|")
+        if (f[0] == kind) {
+            if (f[1] == key) { return state[i] }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+func r2_count(state, kind) {
+    let n = 0
+    let i = 0
+    while (i < len(state)) {
+        let f = split(state[i], "|")
+        if (f[0] == kind) { n = n + 1 }
+        i = i + 1
+    }
+    return n
+}
+
+func r2_sum(state, ref, field) {
+    let total = 0
+    let i = 0
+    while (i < len(state)) {
+        let f = split(state[i], "|")
+        if (f[0] == "LINE") {
+            if (f[1] == ref) {
+                if (field == "debit") { total = total + int(f[3]) }
+                if (field == "credit") { total = total + int(f[4]) }
+            }
+        }
+        i = i + 1
+    }
+    return total
+}
+
+func r2_period_closed(state, period) {
+    let rec = r2_find(state, "PERIOD", period)
+    if (rec == "") { return 0 }
+    let f = split(rec, "|")
+    if (f[2] == "CLOSED") { return 1 }
+    return 0
+}
+
+func r2_persist(path, state) {
+    let out = ""
+    let i = 0
+    while (i < len(state)) {
+        out = out + state[i] + "\n"
+        i = i + 1
+    }
+    writeFile(path, out)
+}
+
+public func acct2_run() {
+    let cmds = split(readFile("data/r2_accounting.dat"), "\n")
+    let state = []
+    let report = ""
+    let i = 0
+    while (i < len(cmds)) {
+        let line = trim(cmds[i])
+        if (line != "") {
+            let f = split(line, "|")
+            let op = trim(f[0])
+            if (op == "ACCOUNT") {
+                let code = trim(f[1])
+                let name = trim(f[2])
+                let rec = "ACCOUNT|" + code + "|" + name
+                let old = r2_find(state, "ACCOUNT", code)
+                if (old == "") { push(state, rec) }
+                let msg = "ACCOUNT " + code + " " + name
+                print("ACCT2 " + msg)
+                report = report + "ACCT2 " + msg + "\n"
+            }
+            if (op == "PERIOD") {
+                let name = trim(f[1])
+                if (r2_find(state, "PERIOD", name) == "") { push(state, "PERIOD|" + name + "|OPEN") }
+            }
+            if (op == "CLOSE") {
+                let name = trim(f[1])
+                let j = 0
+                let replaced = 0
+                while (j < len(state)) {
+                    let g = split(state[j], "|")
+                    if (g[0] == "PERIOD") {
+                        if (g[1] == name) {
+                            state[j] = "PERIOD|" + name + "|CLOSED"
+                            replaced = 1
+                        }
+                    }
+                    j = j + 1
+                }
+                if (replaced == 0) { push(state, "PERIOD|" + name + "|CLOSED") }
+                let msg = "CLOSE period=" + name
+                print("ACCT2 " + msg)
+                report = report + "ACCT2 " + msg + "\n"
+            }
+            if (op == "JOURNAL") {
+                let ref = trim(f[1])
+                if (r2_find(state, "JOURNAL", ref) == "") { push(state, "JOURNAL|" + ref) }
+                let msg = "JOURNAL " + ref
+                print("ACCT2 " + msg)
+                report = report + "ACCT2 " + msg + "\n"
+            }
+            if (op == "LINE") {
+                let ref = trim(f[1])
+                let code = trim(f[2])
+                let debit = int(trim(f[3]))
+                let credit = int(trim(f[4]))
+                if (r2_find(state, "JOURNAL", ref) == "") {
+                    push(state, "ERROR|" + ref + "|unknown_journal|-")
+                    print("ACCT2 LINE " + ref + " FAIL unknown_journal")
+                } else if (r2_find(state, "ACCOUNT", code) == "") {
+                    push(state, "ERROR|" + ref + "|unknown_account|-")
+                    print("ACCT2 LINE " + ref + " FAIL unknown_account " + code)
+                } else {
+                    push(state, "LINE|" + ref + "|" + code + "|" + str(debit) + "|" + str(credit))
+                    let msg = "LINE " + ref + " " + code + " " + str(debit) + " " + str(credit)
+                    print("ACCT2 " + msg)
+                    report = report + "ACCT2 " + msg + "\n"
+                }
+            }
+            if (op == "POST") {
+                let ref = trim(f[1])
+                let period = trim(f[2])
+                if (r2_find(state, "POSTED", ref) != "") {
+                    push(state, "ERROR|" + ref + "|duplicate_ref|-")
+                    print("ACCT2 POST " + ref + " FAIL duplicate_ref")
+                } else if (r2_period_closed(state, period) == 1) {
+                    push(state, "ERROR|" + ref + "|closed_period|-")
+                    print("ACCT2 POST " + ref + " FAIL closed_period period=" + period)
+                } else {
+                    let d = r2_sum(state, ref, "debit")
+                    let c = r2_sum(state, ref, "credit")
+                    if (d != c) {
+                        push(state, "ERROR|" + ref + "|unbalanced|-")
+                        print("ACCT2 POST " + ref + " FAIL unbalanced debits=" + str(d) + " credits=" + str(c))
+                    } else {
+                        push(state, "POSTED|" + ref + "|" + period)
+                        let msg = "POST " + ref + " OK debits=" + str(d) + " credits=" + str(c)
+                        print("ACCT2 " + msg)
+                        report = report + "ACCT2 " + msg + "\n"
+                    }
+                }
+            }
+            if (op == "TRIAL") {
+                let td = 0
+                let tc = 0
+                let k = 0
+                while (k < len(state)) {
+                    let a = split(state[k], "|")
+                    if (a[0] == "ACCOUNT") {
+                        let d = 0
+                        let c = 0
+                        let m = 0
+                        while (m < len(state)) {
+                            let l = split(state[m], "|")
+                            if (l[0] == "LINE") {
+                                if (l[2] == a[1]) {
+                                    if (r2_find(state, "POSTED", l[1]) != "") {
+                                        d = d + int(l[3])
+                                        c = c + int(l[4])
+                                    }
+                                }
+                            }
+                            m = m + 1
+                        }
+                        td = td + d
+                        tc = tc + c
+                        let msg = "TRIAL code=" + a[1] + " name=" + a[2] + " debit=" + str(d) + " credit=" + str(c) + " net=" + str(d - c)
+                        print("ACCT2 " + msg)
+                        report = report + "ACCT2 " + msg + "\n"
+                    }
+                    k = k + 1
+                }
+                let msg = "TRIAL_TOTAL debit=" + str(td) + " credit=" + str(tc) + " accounts=" + str(r2_count(state, "ACCOUNT"))
+                print("ACCT2 " + msg)
+                report = report + "ACCT2 " + msg + "\n"
+            }
+            if (op == "LEDGER") {
+                let k = 0
+                while (k < len(state)) {
+                    let a = split(state[k], "|")
+                    if (a[0] == "ACCOUNT") {
+                        let d = 0
+                        let c = 0
+                        let entries = 0
+                        let m = 0
+                        while (m < len(state)) {
+                            let l = split(state[m], "|")
+                            if (l[0] == "LINE") {
+                                if (l[2] == a[1]) {
+                                    if (r2_find(state, "POSTED", l[1]) != "") {
+                                        d = d + int(l[3])
+                                        c = c + int(l[4])
+                                        entries = entries + 1
+                                        let lm = "LEDGER_LINE code=" + a[1] + " ref=" + l[1] + " debit=" + l[3] + " credit=" + l[4]
+                                        print("ACCT2 " + lm)
+                                        report = report + "ACCT2 " + lm + "\n"
+                                    }
+                                }
+                            }
+                            m = m + 1
+                        }
+                        let msg = "LEDGER code=" + a[1] + " name=" + a[2] + " entries=" + str(entries) + " debit=" + str(d) + " credit=" + str(c) + " net=" + str(d - c)
+                        print("ACCT2 " + msg)
+                        report = report + "ACCT2 " + msg + "\n"
+                    }
+                    k = k + 1
+                }
+            }
+            if (op == "ERRORS") {
+                let k = 0
+                while (k < len(state)) {
+                    let e = split(state[k], "|")
+                    if (e[0] == "ERROR") {
+                        let msg = "ERROR ref=" + e[1] + " code=" + e[2]
+                        print("ACCT2 " + msg)
+                        report = report + "ACCT2 " + msg + "\n"
+                    }
+                    k = k + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    r2_persist("data/r2_acct_state.dat", state)
+    r2_persist("data/r2_acct_report.dat", split(report, "\n"))
+    print("ACCT2_OK accounts=" + str(r2_count(state, "ACCOUNT")) + " journals=" + str(r2_count(state, "JOURNAL")) + " lines=" + str(r2_count(state, "LINE")) + " posted=" + str(r2_count(state, "POSTED")) + " errors=" + str(r2_count(state, "ERROR")))
+}
